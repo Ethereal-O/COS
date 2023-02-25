@@ -62,7 +62,7 @@ int Sender_Make_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += pkt->data[i];
+        checksum += i*pkt->data[i];
 
     return checksum;
 }
@@ -76,7 +76,7 @@ bool Sender_Check_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += pkt->data[i];
+        checksum += i*pkt->data[i];
 
     return (char)checksum == pkt->data[0];
 }

@@ -45,7 +45,7 @@ int Receiver_Make_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += pkt->data[i];
+        checksum += i*pkt->data[i];
 
     return checksum;
 }
@@ -59,7 +59,7 @@ bool Receiver_Check_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += pkt->data[i];
+        checksum += i*pkt->data[i];
 
     return (char)checksum == pkt->data[0];
 }
@@ -124,7 +124,7 @@ void Change_Window(packet *pkt)
     else if (seq < receiver_pkt_window->begin_num)
     {
         // drop it
-        printf("error drop");
+        // printf("error drop");
         // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
     }
     // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
@@ -182,10 +182,13 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     // if (msg != NULL)
     //     free(msg);
 
-    // printf("receive:%d\n",pkt->data[3]);
 
     if (!Receiver_Check_Checksum(pkt))
         return;
+
+    // printf("pass!");
+        
+
 
     Change_Window(pkt);
     pkt->data[4] = pkt->data[3];
