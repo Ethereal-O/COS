@@ -183,6 +183,9 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     if (!Receiver_Check_Checksum(pkt))
         return;
 
+    // if (pkt->data[1]==0)
+    // return;
+
     // printf("pass!");
 
     Change_Window(pkt);

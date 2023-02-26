@@ -228,6 +228,9 @@ void Sender_FromLowerLayer(struct packet *pkt)
     if (!Sender_Check_Checksum(pkt) || (pkt->data[4] < (char)pkt_window->begin_num))
         return;
 
+    // if (pkt->data[1]==0 || (pkt->data[4] < (char)pkt_window->begin_num))
+    //     return;
+
     // update window
     pkt_window->is_ack[pkt->data[4] % WINDOW_SIZE] = true;
     Update_Window();
