@@ -25,7 +25,6 @@
 #define WINDOW_SIZE 10
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
 
-int all=0;
 
 // define the window
 struct window
@@ -45,7 +44,7 @@ int Receiver_Make_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i*pkt->data[i];
+        checksum += i * pkt->data[i];
 
     return checksum;
 }
@@ -59,14 +58,14 @@ bool Receiver_Check_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bit
     for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i*pkt->data[i];
+        checksum += i * pkt->data[i];
 
     return (char)checksum == pkt->data[0];
 }
 
-void Clean_Window()
+void Clean_Window(packet *pkt)
 {
-    
+    // printf("clean: %d:", receiver_pkt_window->begin_num);
     // move all items to msg
     int i;
     for (i = 0; i < WINDOW_SIZE; i++)
@@ -92,43 +91,40 @@ void Clean_Window()
         memcpy(msg->data, pkt->data + HEADER_SIZE, msg->size);
         Receiver_ToUpperLayer(msg);
     }
-    // printf("clean:%d %d\n",receiver_pkt_window->begin_num, i);
+
+    if (pkt == NULL)
+        return;
 
     // clean it
     for (i = 0; i < WINDOW_SIZE; i++)
     {
         receiver_pkt_window->pkts[i] = NULL;
     }
-    receiver_pkt_window->begin_num = (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM;
+    receiver_pkt_window->begin_num = pkt->data[3] - pkt->data[3] % WINDOW_SIZE;
 }
 
 void Change_Window(packet *pkt)
 {
-    
+
     int seq = pkt->data[3];
     if (seq >= receiver_pkt_window->begin_num && seq < receiver_pkt_window->begin_num + WINDOW_SIZE)
     {
         // now window
         receiver_pkt_window->pkts[seq % WINDOW_SIZE] = new packet();
-        memcpy(receiver_pkt_window->pkts[seq%WINDOW_SIZE]->data,pkt->data,RDT_PKTSIZE);
+        memcpy(receiver_pkt_window->pkts[seq % WINDOW_SIZE]->data, pkt->data, RDT_PKTSIZE);
     }
     else if (seq >= (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM)
     {
         // new window
-        Clean_Window();
+        Clean_Window(pkt);
         receiver_pkt_window->pkts[seq % WINDOW_SIZE] = new packet();
-        memcpy(receiver_pkt_window->pkts[seq%WINDOW_SIZE]->data,pkt->data,RDT_PKTSIZE);
-        // printf("set %d %d\n",seq % WINDOW_SIZE,seq);
-        // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
+        memcpy(receiver_pkt_window->pkts[seq % WINDOW_SIZE]->data, pkt->data, RDT_PKTSIZE);
     }
     else if (seq < receiver_pkt_window->begin_num)
     {
         // drop it
         // printf("error drop");
-        // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
     }
-    // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
-    
 }
 
 /* receiver initialization, called once at the very beginning */
@@ -149,7 +145,7 @@ void Receiver_Init()
 void Receiver_Final()
 {
     fprintf(stdout, "At %.2fs: receiver finalizing ...\n", GetSimulationTime());
-    Clean_Window();
+    Clean_Window(NULL);
 }
 
 /* event handler, called when a packet is passed from the lower layer at the
@@ -182,13 +178,12 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     // if (msg != NULL)
     //     free(msg);
 
+    // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
 
     if (!Receiver_Check_Checksum(pkt))
         return;
 
     // printf("pass!");
-        
-
 
     Change_Window(pkt);
     pkt->data[4] = pkt->data[3];

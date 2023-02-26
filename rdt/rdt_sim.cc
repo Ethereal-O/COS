@@ -320,7 +320,7 @@ void Receiver_ToLowerLayer(struct packet *pkt)
 	// for (int i=6; i<RDT_PKTSIZE; i++) {
 	//     e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
 	// }
-    }
+    // }
 
     // for (int i=0; i<RDT_PKTSIZE; i++) {
 	//     e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
