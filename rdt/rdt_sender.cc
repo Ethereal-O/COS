@@ -24,7 +24,7 @@
 
 #define HEADER_SIZE 6
 #define WINDOW_SIZE 10
-#define TIME_OUT 500
+#define TIME_OUT 0.4
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
 
 struct header
@@ -168,7 +168,7 @@ void Update_Window()
     {
         if (sender_pkt_window->pkts[i] == NULL)
             continue;
-        // delete sender_pkt_window->pkts[i];
+        delete sender_pkt_window->pkts[i];
         sender_pkt_window->pkts[i] = NULL;
         sender_pkt_window->is_ack[i] = true;
     }

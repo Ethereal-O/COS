@@ -107,6 +107,9 @@ void Clean_Window(packet *pkt)
     // clean it
     for (i = 0; i < WINDOW_SIZE; i++)
     {
+        if (receiver_pkt_window->pkts[i] == NULL)
+            continue;
+        delete receiver_pkt_window->pkts[i];
         receiver_pkt_window->pkts[i] = NULL;
     }
     receiver_pkt_window->begin_num = pkt->data[4] - pkt->data[4] % WINDOW_SIZE;
