@@ -21,9 +21,22 @@
 #include "rdt_struct.h"
 #include "rdt_receiver.h"
 
-#define HEADER_SIZE 6
+#define HEADER_SIZE 8
 #define WINDOW_SIZE 10
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
+#define CRC_KEY 0xEDB88320
+
+struct header
+{
+    // checksum 4 bytes
+    int checksum;
+    // // checksum 2 bytes
+    // short checksum;
+    char payload_size;
+    char index;
+    char sequence_number;
+    char acknowledgment_sequence_number;
+} receiver_header;
 
 // define the window
 struct window
@@ -33,29 +46,29 @@ struct window
 };
 
 std::unique_ptr<window> receiver_pkt_window;
-unsigned short receiver_CrcTable[256];
+decltype(receiver_header.checksum) receiver_CrcTable[256];
 
 void Receiver_Make_Checksum_Table()
 {
     for (int i = 0; i < 256; i++)
     {
-        unsigned short Crc = i;
+        decltype(receiver_header.checksum) Crc = i;
         for (int j = 0; j < 8; j++)
             if (Crc & 0x1)
-                Crc = (Crc >> 1) ^ 0xA001;
+                Crc = (Crc >> 1) ^ CRC_KEY;
             else
                 Crc >>= 1;
         receiver_CrcTable[i] = Crc;
     }
 }
 
-short Receiver_Make_Checksum(packet *pkt)
+decltype(receiver_header.checksum) Receiver_Make_Checksum(packet *pkt)
 {
     // first init to zero
-    short checksum = 0x0000;
+    decltype(receiver_header.checksum) checksum = 0x0;
 
     // add all the characters in payload, but jump the checksum bits
-    for (int i = 2; i < RDT_PKTSIZE; i++)
+    for (int i = sizeof(receiver_header.checksum); i < RDT_PKTSIZE; i++)
         checksum = (checksum >> 8) ^ receiver_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return checksum;
@@ -64,13 +77,13 @@ short Receiver_Make_Checksum(packet *pkt)
 bool Receiver_Check_Checksum(packet *pkt)
 {
     // first init to zero
-    short checksum = 0x0000;
+    decltype(receiver_header.checksum) checksum = 0x0;
 
     // add all the characters in payload, but jump the checksum bits
-    for (int i = 2; i < RDT_PKTSIZE; i++)
+    for (int i = sizeof(receiver_header.checksum); i < RDT_PKTSIZE; i++)
         checksum = (checksum >> 8) ^ receiver_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
-    return (short)checksum == *(short *)(pkt->data);
+    return (decltype(receiver_header.checksum))checksum == *(decltype(receiver_header.checksum) *)(pkt->data);
 }
 
 void Clean_Window(packet *pkt)
@@ -87,7 +100,7 @@ void Clean_Window(packet *pkt)
         struct message *msg = (struct message *)malloc(sizeof(struct message));
         ASSERT(msg != NULL);
 
-        msg->size = pkt->data[2];
+        msg->size = pkt->data[sizeof(receiver_header.checksum)];
 
         // sanity check in case the packet is corrupted
         if (msg->size < 0)
@@ -112,12 +125,12 @@ void Clean_Window(packet *pkt)
         delete receiver_pkt_window->pkts[i];
         receiver_pkt_window->pkts[i] = NULL;
     }
-    receiver_pkt_window->begin_num = pkt->data[4] - pkt->data[4] % WINDOW_SIZE;
+    receiver_pkt_window->begin_num = pkt->data[sizeof(receiver_header.checksum) + 2] - pkt->data[sizeof(receiver_header.checksum) + 2] % WINDOW_SIZE;
 }
 
 void Change_Window(packet *pkt)
 {
-    int seq = pkt->data[4];
+    int seq = pkt->data[sizeof(receiver_header.checksum) + 2];
     if (seq >= receiver_pkt_window->begin_num && seq < receiver_pkt_window->begin_num + WINDOW_SIZE)
     {
         // now window
@@ -177,7 +190,7 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     Change_Window(pkt);
 
     // return to sender
-    pkt->data[5] = pkt->data[4];
-    *(short *)pkt->data = Receiver_Make_Checksum(pkt);
+    pkt->data[sizeof(receiver_header.checksum) + 3] = pkt->data[sizeof(receiver_header.checksum) + 2];
+    *(decltype(receiver_header.checksum) *)pkt->data = Receiver_Make_Checksum(pkt);
     Receiver_ToLowerLayer(pkt);
 }

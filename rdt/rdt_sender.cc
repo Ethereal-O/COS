@@ -22,20 +22,23 @@
 #include "rdt_struct.h"
 #include "rdt_sender.h"
 
-#define HEADER_SIZE 6
+#define HEADER_SIZE 8
 #define WINDOW_SIZE 10
 #define TIME_OUT 0.4
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
+#define CRC_KEY 0xEDB88320
 
 struct header
 {
-    // checksum 2 bytes
-    short checksum;
+    // checksum 4 bytes
+    int checksum;
+    // // checksum 2 bytes
+    // short checksum;
     char payload_size;
     char index;
     char sequence_number;
     char acknowledgment_sequence_number;
-};
+} sender_header;
 
 struct window
 {
@@ -46,7 +49,7 @@ struct window
 
 std::unique_ptr<std::list<packet *>> sender_pkt_list;
 std::unique_ptr<window> sender_pkt_window;
-unsigned short sender_CrcTable[256];
+decltype(sender_header.checksum) sender_CrcTable[256];
 
 void Print_List()
 {
@@ -59,23 +62,23 @@ void Sender_Make_Checksum_Table()
 {
     for (int i = 0; i < 256; i++)
     {
-        unsigned short Crc = i;
+        decltype(sender_header.checksum) Crc = i;
         for (int j = 0; j < 8; j++)
             if (Crc & 0x1)
-                Crc = (Crc >> 1) ^ 0xA001;
+                Crc = (Crc >> 1) ^ CRC_KEY;
             else
                 Crc >>= 1;
         sender_CrcTable[i] = Crc;
     }
 }
 
-short Sender_Make_Checksum(packet *pkt)
+decltype(sender_header.checksum) Sender_Make_Checksum(packet *pkt)
 {
     // first init to zero
-    short checksum = 0x0000;
+    decltype(sender_header.checksum) checksum = 0x0;
 
     // add all the characters in payload, but jump the checksum bits
-    for (int i = 2; i < RDT_PKTSIZE; i++)
+    for (int i = sizeof(sender_header.checksum); i < RDT_PKTSIZE; i++)
         checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return checksum;
@@ -84,13 +87,13 @@ short Sender_Make_Checksum(packet *pkt)
 bool Sender_Check_Checksum(packet *pkt)
 {
     // first init to zero
-    short checksum = 0x0000;
+    decltype(sender_header.checksum) checksum = 0x0;
 
     // add all the characters in payload, but jump the checksum bits
-    for (int i = 2; i < RDT_PKTSIZE; i++)
+    for (int i = sizeof(sender_header.checksum); i < RDT_PKTSIZE; i++)
         checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
-    return (short)checksum == *(short *)pkt->data;
+    return (decltype(sender_header.checksum))checksum == *(decltype(sender_header.checksum) *)pkt->data;
 }
 
 void Add_Message(message *msg)
@@ -105,12 +108,12 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[2] = maxpayload_size;
-        pkt->data[3] = index;
+        pkt->data[sizeof(sender_header.checksum)] = maxpayload_size;
+        pkt->data[sizeof(sender_header.checksum) + 1] = index;
         memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, maxpayload_size);
 
         // make checksum
-        *(short *)pkt->data = Sender_Make_Checksum(pkt);
+        *(decltype(sender_header.checksum) *)pkt->data = Sender_Make_Checksum(pkt);
 
         // add it to the list
         sender_pkt_list->emplace_back(pkt);
@@ -124,12 +127,12 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[2] = msg->size - index * maxpayload_size;
-        pkt->data[3] = index;
-        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[2]);
+        pkt->data[sizeof(sender_header.checksum)] = msg->size - index * maxpayload_size;
+        pkt->data[sizeof(sender_header.checksum) + 1] = index;
+        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[sizeof(sender_header.checksum)]);
 
         // make checksum
-        *(short *)pkt->data = Sender_Make_Checksum(pkt);
+        *(decltype(sender_header.checksum) *)pkt->data = Sender_Make_Checksum(pkt);
 
         // add it to the list
         sender_pkt_list->emplace_back(pkt);
@@ -184,8 +187,8 @@ void Update_Window()
         if (top_pkt == NULL)
             break;
         sender_pkt_window->pkts[i] = top_pkt;
-        sender_pkt_window->pkts[i]->data[4] = sender_pkt_window->begin_num + i;
-        *(short *)sender_pkt_window->pkts[i]->data = Sender_Make_Checksum(sender_pkt_window->pkts[i]);
+        sender_pkt_window->pkts[i]->data[sizeof(sender_header.checksum) + 2] = sender_pkt_window->begin_num + i;
+        *(decltype(sender_header.checksum) *)sender_pkt_window->pkts[i]->data = Sender_Make_Checksum(sender_pkt_window->pkts[i]);
         sender_pkt_window->is_ack[i] = false;
         sender_pkt_list->pop_front();
     }
@@ -239,11 +242,11 @@ void Sender_FromUpperLayer(struct message *msg)
    sender */
 void Sender_FromLowerLayer(struct packet *pkt)
 {
-    if (!Sender_Check_Checksum(pkt) || (pkt->data[5] < (char)sender_pkt_window->begin_num))
+    if (!Sender_Check_Checksum(pkt) || (pkt->data[sizeof(sender_header.checksum) + 3] < (char)sender_pkt_window->begin_num))
         return;
 
     // update window
-    sender_pkt_window->is_ack[pkt->data[5] % WINDOW_SIZE] = true;
+    sender_pkt_window->is_ack[pkt->data[sizeof(sender_header.checksum) + 3] % WINDOW_SIZE] = true;
     Update_Window();
 }
 
