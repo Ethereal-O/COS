@@ -289,18 +289,6 @@ void Sender_ToLowerLayer(struct packet *pkt)
 	}
     }
 
-    // if (myrandom()<corrupt_rate) {
-	// for (int i=6; i<RDT_PKTSIZE; i++) {
-	//     e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
-	// }
-    // }
-
-
-    // if (myrandom()<corrupt_rate) {
-	// e->pkt.data[1] = 0;
-    // }
-
-
     /* schedule the packet arrival event at the other side */
     if (myrandom()<outoforder_rate)
 	e->sched_time = sim_core.time() + pkt_latency*2.0*myrandom();
@@ -327,21 +315,6 @@ void Receiver_ToLowerLayer(struct packet *pkt)
 	    e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
 	}
     }
-
-    // if (myrandom()<corrupt_rate) {
-	// for (int i=6; i<RDT_PKTSIZE; i++) {
-	//     e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
-	// }
-    // }
-
-
-    // if (myrandom()<corrupt_rate) {
-	// e->pkt.data[1] = 0;
-    // }
-
-    // for (int i=0; i<RDT_PKTSIZE; i++) {
-	//     e->pkt.data[i] = e->pkt.data[i] + (char)(myrandom()*20) - 10;
-	// }
 
     /* schedule the packet arrival event at the other side */
     if (myrandom()<outoforder_rate)

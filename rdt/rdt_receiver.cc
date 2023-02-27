@@ -21,10 +21,9 @@
 #include "rdt_struct.h"
 #include "rdt_receiver.h"
 
-#define HEADER_SIZE 5
+#define HEADER_SIZE 6
 #define WINDOW_SIZE 10
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
-
 
 // define the window
 struct window
@@ -34,17 +33,30 @@ struct window
 };
 
 std::unique_ptr<window> receiver_pkt_window;
+unsigned short receiver_CrcTable[256];
 
-int Receiver_Make_Checksum(packet *pkt)
+void Receiver_Make_Checksum_Table()
+{
+    for (int i = 0; i < 256; i++)
+    {
+        unsigned short Crc = i;
+        for (int j = 0; j < 8; j++)
+            if (Crc & 0x1)
+                Crc = (Crc >> 1) ^ 0xA001;
+            else
+                Crc >>= 1;
+        receiver_CrcTable[i] = Crc;
+    }
+}
+
+short Receiver_Make_Checksum(packet *pkt)
 {
     // first init to zero
-    int checksum = 0;
-    if (pkt == NULL)
-        return checksum;
+    short checksum = 0x0000;
 
-    // add all the characters in payload, but jump the checksum bit
-    for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i * pkt->data[i];
+    // add all the characters in payload, but jump the checksum bits
+    for (int i = 2; i < RDT_PKTSIZE; i++)
+        checksum = (checksum >> 8) ^ receiver_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return checksum;
 }
@@ -52,20 +64,17 @@ int Receiver_Make_Checksum(packet *pkt)
 bool Receiver_Check_Checksum(packet *pkt)
 {
     // first init to zero
-    int checksum = 0;
-    if (pkt == NULL)
-        return false;
+    short checksum = 0x0000;
 
-    // add all the characters in payload, but jump the checksum bit
-    for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i * pkt->data[i];
+    // add all the characters in payload, but jump the checksum bits
+    for (int i = 2; i < RDT_PKTSIZE; i++)
+        checksum = (checksum >> 8) ^ receiver_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
-    return (char)checksum == pkt->data[0];
+    return (short)checksum == *(short *)(pkt->data);
 }
 
 void Clean_Window(packet *pkt)
 {
-    // printf("clean: %d:", receiver_pkt_window->begin_num);
     // move all items to msg
     int i;
     for (i = 0; i < WINDOW_SIZE; i++)
@@ -78,9 +87,9 @@ void Clean_Window(packet *pkt)
         struct message *msg = (struct message *)malloc(sizeof(struct message));
         ASSERT(msg != NULL);
 
-        msg->size = pkt->data[1];
+        msg->size = pkt->data[2];
 
-        /* sanity check in case the packet is corrupted */
+        // sanity check in case the packet is corrupted
         if (msg->size < 0)
             msg->size = 0;
         if (msg->size > RDT_PKTSIZE - HEADER_SIZE)
@@ -100,13 +109,12 @@ void Clean_Window(packet *pkt)
     {
         receiver_pkt_window->pkts[i] = NULL;
     }
-    receiver_pkt_window->begin_num = pkt->data[3] - pkt->data[3] % WINDOW_SIZE;
+    receiver_pkt_window->begin_num = pkt->data[4] - pkt->data[4] % WINDOW_SIZE;
 }
 
 void Change_Window(packet *pkt)
 {
-
-    int seq = pkt->data[3];
+    int seq = pkt->data[4];
     if (seq >= receiver_pkt_window->begin_num && seq < receiver_pkt_window->begin_num + WINDOW_SIZE)
     {
         // now window
@@ -131,11 +139,15 @@ void Change_Window(packet *pkt)
 void Receiver_Init()
 {
     fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
+
     // init pkt buffer
     receiver_pkt_window = std::make_unique<window>();
     for (int i = 0; i < WINDOW_SIZE; i++)
         receiver_pkt_window->pkts[i] = NULL;
     receiver_pkt_window->begin_num = (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM;
+
+    // make checksum table
+    Receiver_Make_Checksum_Table();
 }
 
 /* receiver finalization, called once at the very end.
@@ -145,6 +157,8 @@ void Receiver_Init()
 void Receiver_Final()
 {
     fprintf(stdout, "At %.2fs: receiver finalizing ...\n", GetSimulationTime());
+
+    // clean window
     Clean_Window(NULL);
 }
 
@@ -152,45 +166,15 @@ void Receiver_Final()
    receiver */
 void Receiver_FromLowerLayer(struct packet *pkt)
 {
-    /* 1-byte header indicating the size of the payload */
-    // int header_size = 1;
-
-    // /* construct a message and deliver to the upper layer */
-    // struct message *msg = (struct message *)malloc(sizeof(struct message));
-    // ASSERT(msg != NULL);
-
-    // msg->size = pkt->data[0];
-
-    // /* sanity check in case the packet is corrupted */
-    // if (msg->size < 0)
-    //     msg->size = 0;
-    // if (msg->size > RDT_PKTSIZE - header_size)
-    //     msg->size = RDT_PKTSIZE - header_size;
-
-    // msg->data = (char *)malloc(msg->size);
-    // ASSERT(msg->data != NULL);
-    // memcpy(msg->data, pkt->data + header_size, msg->size);
-    // Receiver_ToUpperLayer(msg);
-
-    // /* don't forget to free the space */
-    // if (msg->data != NULL)
-    //     free(msg->data);
-    // if (msg != NULL)
-    //     free(msg);
-
-    // printf("%d %d\n",pkt->data[3],receiver_pkt_window->begin_num);
-
+    // check checksum
     if (!Receiver_Check_Checksum(pkt))
         return;
 
-    // if (pkt->data[1]==0)
-    // return;
-
-    // printf("pass!");
-
+    // change window
     Change_Window(pkt);
-    pkt->data[4] = pkt->data[3];
-    pkt->data[0] = Receiver_Make_Checksum(pkt);
 
+    // return to sender
+    pkt->data[5] = pkt->data[4];
+    *(short *)pkt->data = Receiver_Make_Checksum(pkt);
     Receiver_ToLowerLayer(pkt);
 }

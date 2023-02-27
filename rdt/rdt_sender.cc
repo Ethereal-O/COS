@@ -22,18 +22,19 @@
 #include "rdt_struct.h"
 #include "rdt_sender.h"
 
-#define HEADER_SIZE 5
+#define HEADER_SIZE 6
 #define WINDOW_SIZE 10
 #define TIME_OUT 500
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
 
 struct header
 {
-    int checksum;
-    int payload_size;
-    int index;
-    int sequence_number;
-    int acknowledgment_sequence_number;
+    // checksum 2 bytes
+    short checksum;
+    char payload_size;
+    char index;
+    char sequence_number;
+    char acknowledgment_sequence_number;
 };
 
 struct window
@@ -43,26 +44,39 @@ struct window
     packet *pkts[WINDOW_SIZE];
 };
 
-std::unique_ptr<std::list<packet *>> pkt_list;
-std::unique_ptr<window> pkt_window;
+std::unique_ptr<std::list<packet *>> sender_pkt_list;
+std::unique_ptr<window> sender_pkt_window;
+unsigned short sender_CrcTable[256];
 
 void Print_List()
 {
     // for debug, to print the info of pkt list
-    for (auto pkt : *pkt_list)
+    for (auto pkt : *sender_pkt_list)
         printf("%d %d %d\n", pkt->data[1], pkt->data[2], pkt->data[3]);
 }
 
-int Sender_Make_Checksum(packet *pkt)
+void Sender_Make_Checksum_Table()
+{
+    for (int i = 0; i < 256; i++)
+    {
+        unsigned short Crc = i;
+        for (int j = 0; j < 8; j++)
+            if (Crc & 0x1)
+                Crc = (Crc >> 1) ^ 0xA001;
+            else
+                Crc >>= 1;
+        sender_CrcTable[i] = Crc;
+    }
+}
+
+short Sender_Make_Checksum(packet *pkt)
 {
     // first init to zero
-    int checksum = 0;
-    if (pkt == NULL)
-        return checksum;
+    short checksum = 0x0000;
 
-    // add all the characters in payload, but jump the checksum bit
-    for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i*pkt->data[i];
+    // add all the characters in payload, but jump the checksum bits
+    for (int i = 2; i < RDT_PKTSIZE; i++)
+        checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return checksum;
 }
@@ -70,15 +84,13 @@ int Sender_Make_Checksum(packet *pkt)
 bool Sender_Check_Checksum(packet *pkt)
 {
     // first init to zero
-    int checksum = 0;
-    if (pkt == NULL)
-        return false;
+    short checksum = 0x0000;
 
-    // add all the characters in payload, but jump the checksum bit
-    for (int i = 1; i < RDT_PKTSIZE; i++)
-        checksum += i*pkt->data[i];
+    // add all the characters in payload, but jump the checksum bits
+    for (int i = 2; i < RDT_PKTSIZE; i++)
+        checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
-    return (char)checksum == pkt->data[0];
+    return (short)checksum == *(short *)pkt->data;
 }
 
 void Add_Message(message *msg)
@@ -93,15 +105,15 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[1] = maxpayload_size;
-        pkt->data[2] = index;
+        pkt->data[2] = maxpayload_size;
+        pkt->data[3] = index;
         memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, maxpayload_size);
 
         // make checksum
-        pkt->data[0] = Sender_Make_Checksum(pkt);
+        *(short *)pkt->data = Sender_Make_Checksum(pkt);
 
         // add it to the list
-        pkt_list->emplace_back(pkt);
+        sender_pkt_list->emplace_back(pkt);
 
         // move the cursor
         index++;
@@ -112,15 +124,15 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[1] = msg->size - index * maxpayload_size;
-        pkt->data[2] = index;
-        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[1]);
+        pkt->data[2] = msg->size - index * maxpayload_size;
+        pkt->data[3] = index;
+        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[2]);
 
         // make checksum
-        pkt->data[0] = Sender_Make_Checksum(pkt);
+        *(short *)pkt->data = Sender_Make_Checksum(pkt);
 
         // add it to the list
-        pkt_list->emplace_back(pkt);
+        sender_pkt_list->emplace_back(pkt);
     }
 }
 
@@ -129,9 +141,9 @@ void Resend()
     // send packets
     for (int i = 0; i < WINDOW_SIZE; i++)
     {
-        if (pkt_window->pkts[i] == NULL || pkt_window->is_ack[i] == true)
+        if (sender_pkt_window->pkts[i] == NULL || sender_pkt_window->is_ack[i] == true)
             continue;
-        Sender_ToLowerLayer(pkt_window->pkts[i]);
+        Sender_ToLowerLayer(sender_pkt_window->pkts[i]);
     }
 
     // set timer
@@ -143,7 +155,7 @@ void Update_Window()
     // check if all pkts are acked
     bool is_all_ack = true;
     for (int i = 0; i < WINDOW_SIZE; i++)
-        is_all_ack = is_all_ack && pkt_window->is_ack[i];
+        is_all_ack = is_all_ack && sender_pkt_window->is_ack[i];
 
     if (!is_all_ack)
         return;
@@ -154,30 +166,28 @@ void Update_Window()
 
     for (int i = 0; i < WINDOW_SIZE; i++)
     {
-        if (pkt_window->pkts[i] == NULL)
+        if (sender_pkt_window->pkts[i] == NULL)
             continue;
-        // delete pkt_window->pkts[i];
-        pkt_window->pkts[i] = NULL;
-        pkt_window->is_ack[i] = true;
+        // delete sender_pkt_window->pkts[i];
+        sender_pkt_window->pkts[i] = NULL;
+        sender_pkt_window->is_ack[i] = true;
     }
 
     // init the window
-    pkt_window->begin_num = (unsigned)(char)((pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM);
-    // if (pkt_window->begin_num<0)
-    // pkt_window->begin_num = 0;
-    // else
-    // pkt_window->begin_num = (unsigned)(char)((pkt_window->begin_num + max(WINDOW_SIZE,pkt_list->size())) % MAX_WINDOW_NUM);
+    sender_pkt_window->begin_num = (unsigned)(char)((sender_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM);
+
+    // move pkts to window
     int i;
     for (i = 0; i < WINDOW_SIZE; i++)
     {
-        packet *top_pkt = pkt_list->front();
+        packet *top_pkt = sender_pkt_list->front();
         if (top_pkt == NULL)
             break;
-        pkt_window->pkts[i] = top_pkt;
-        pkt_window->pkts[i]->data[3] = pkt_window->begin_num + i;
-        pkt_window->pkts[i]->data[0] = Sender_Make_Checksum(pkt_window->pkts[i]);
-        pkt_window->is_ack[i] = false;
-        pkt_list->pop_front();
+        sender_pkt_window->pkts[i] = top_pkt;
+        sender_pkt_window->pkts[i]->data[4] = sender_pkt_window->begin_num + i;
+        *(short *)sender_pkt_window->pkts[i]->data = Sender_Make_Checksum(sender_pkt_window->pkts[i]);
+        sender_pkt_window->is_ack[i] = false;
+        sender_pkt_list->pop_front();
     }
 
     // no other packets
@@ -191,16 +201,20 @@ void Update_Window()
 void Sender_Init()
 {
     fprintf(stdout, "At %.2fs: sender initializing ...\n", GetSimulationTime());
+
     // init pkt buffer
-    pkt_list = std::make_unique<std::list<packet *>>();
+    sender_pkt_list = std::make_unique<std::list<packet *>>();
 
     // init pkt window
-    pkt_window = std::make_unique<window>();
+    sender_pkt_window = std::make_unique<window>();
     for (int i = 0; i < WINDOW_SIZE; i++)
     {
-        pkt_window->is_ack[i] = true;
-        pkt_window->pkts[i] = NULL;
+        sender_pkt_window->is_ack[i] = true;
+        sender_pkt_window->pkts[i] = NULL;
     }
+
+    // make checksum table
+    Sender_Make_Checksum_Table();
 }
 
 /* sender finalization, called once at the very end.
@@ -225,14 +239,11 @@ void Sender_FromUpperLayer(struct message *msg)
    sender */
 void Sender_FromLowerLayer(struct packet *pkt)
 {
-    if (!Sender_Check_Checksum(pkt) || (pkt->data[4] < (char)pkt_window->begin_num))
+    if (!Sender_Check_Checksum(pkt) || (pkt->data[5] < (char)sender_pkt_window->begin_num))
         return;
 
-    // if (pkt->data[1]==0 || (pkt->data[4] < (char)pkt_window->begin_num))
-    //     return;
-
     // update window
-    pkt_window->is_ack[pkt->data[4] % WINDOW_SIZE] = true;
+    sender_pkt_window->is_ack[pkt->data[5] % WINDOW_SIZE] = true;
     Update_Window();
 }
 
