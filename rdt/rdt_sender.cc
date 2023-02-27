@@ -24,9 +24,10 @@
 
 #define HEADER_SIZE 8
 #define WINDOW_SIZE 10
-#define TIME_OUT 0.4
+#define TIME_OUT 0.3
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
 #define CRC_KEY 0xEDB88320
+#define OVER_CIRCLE (4 * WINDOW_SIZE)
 
 struct header
 {
@@ -170,8 +171,8 @@ void Update_Window()
         sender_pkt_window->is_ack[i] = true;
     }
 
-    // init the window
-    sender_pkt_window->begin_num = (unsigned)(char)((sender_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM);
+    // init the window, use local var to avoid list's size is 0 but make window num add
+    int next_begin_num = (unsigned)(char)((sender_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM);
 
     // move pkts to window
     int i;
@@ -181,7 +182,7 @@ void Update_Window()
         if (top_pkt == NULL)
             break;
         sender_pkt_window->pkts[i] = top_pkt;
-        sender_pkt_window->pkts[i]->data[sizeof(sender_header.checksum) + 2] = sender_pkt_window->begin_num + i;
+        sender_pkt_window->pkts[i]->data[sizeof(sender_header.checksum) + 2] = next_begin_num + i;
         *(decltype(sender_header.checksum) *)sender_pkt_window->pkts[i]->data = Sender_Make_Checksum(sender_pkt_window->pkts[i]);
         sender_pkt_window->is_ack[i] = false;
         sender_pkt_list->pop_front();
@@ -191,6 +192,8 @@ void Update_Window()
     if (i == 0)
         return;
 
+    // add it now!
+    sender_pkt_window->begin_num = next_begin_num;
     Resend();
 }
 
@@ -236,7 +239,8 @@ void Sender_FromUpperLayer(struct message *msg)
    sender */
 void Sender_FromLowerLayer(struct packet *pkt)
 {
-    if (!Sender_Check_Checksum(pkt) || (pkt->data[sizeof(sender_header.checksum) + 3] < (char)sender_pkt_window->begin_num))
+    // check it's checksum and if it has passed
+    if (!Sender_Check_Checksum(pkt) || (pkt->data[sizeof(sender_header.checksum) + 3] < (char)sender_pkt_window->begin_num) || (pkt->data[sizeof(sender_header.checksum) + 3] - (char)sender_pkt_window->begin_num > OVER_CIRCLE))
         return;
 
     // update window

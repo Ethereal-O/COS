@@ -1,16 +1,13 @@
 /*
  * FILE: rdt_receiver.cc
  * DESCRIPTION: Reliable data transfer receiver.
- * NOTE: This implementation assumes there is no packet loss, corruption, or
- *       reordering.  You will need to enhance it to deal with all these
- *       situations.  In this implementation, the packet format is laid out as
+ * NOTE: 
+ *       In this implementation, the packet format is laid out as
  *       the following:
  *
- *       |<-  1 byte  ->|<-             the rest            ->|
- *       | payload size |<-             payload             ->|
+ *       |<-  4 bytes ->|<-  1 byte  ->|<-  1 byte  ->|<-  1 byte  ->|<-  1 byte  ->|<-             the rest            ->|
+ *       |   checksum   | payload_size |     index    |    seq_num   |  ack_seq_num |<-             payload             ->|
  *
- *       The first byte of each packet indicates the size of the payload
- *       (excluding this single-byte header)
  */
 
 #include <stdio.h>
@@ -25,6 +22,7 @@
 #define WINDOW_SIZE 10
 #define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
 #define CRC_KEY 0xEDB88320
+#define OVER_CIRCLE (4 * WINDOW_SIZE)
 
 struct header
 {
@@ -137,7 +135,8 @@ void Change_Window(packet *pkt)
         receiver_pkt_window->pkts[seq % WINDOW_SIZE] = new packet();
         memcpy(receiver_pkt_window->pkts[seq % WINDOW_SIZE]->data, pkt->data, RDT_PKTSIZE);
     }
-    else if (seq >= (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM)
+    // check if it has passed
+    else if (seq >= (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM && (seq - (receiver_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM) < OVER_CIRCLE)
     {
         // new window
         Clean_Window(pkt);
