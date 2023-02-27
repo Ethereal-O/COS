@@ -112,9 +112,6 @@ void Add_Message(message *msg)
         pkt->data[sizeof(sender_header.checksum) + 1] = index;
         memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, maxpayload_size);
 
-        // make checksum
-        *(decltype(sender_header.checksum) *)pkt->data = Sender_Make_Checksum(pkt);
-
         // add it to the list
         sender_pkt_list->emplace_back(pkt);
 
@@ -130,9 +127,6 @@ void Add_Message(message *msg)
         pkt->data[sizeof(sender_header.checksum)] = msg->size - index * maxpayload_size;
         pkt->data[sizeof(sender_header.checksum) + 1] = index;
         memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[sizeof(sender_header.checksum)]);
-
-        // make checksum
-        *(decltype(sender_header.checksum) *)pkt->data = Sender_Make_Checksum(pkt);
 
         // add it to the list
         sender_pkt_list->emplace_back(pkt);
