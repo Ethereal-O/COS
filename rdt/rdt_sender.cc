@@ -22,12 +22,11 @@
 #include "rdt_struct.h"
 #include "rdt_sender.h"
 
-#define HEADER_SIZE 8
+#define HEADER_SIZE 9
 #define WINDOW_SIZE 10
 #define TIME_OUT 0.3
-#define MAX_WINDOW_NUM (10 * WINDOW_SIZE)
+// #define TIME_OUT 0.1
 #define CRC_KEY 0xEDB88320
-#define OVER_CIRCLE (4 * WINDOW_SIZE)
 
 struct header
 {
@@ -35,16 +34,21 @@ struct header
     int checksum;
     // // checksum 2 bytes
     // short checksum;
+    int pkt_ID;
     char payload_size;
-    char index;
-    char sequence_number;
-    char acknowledgment_sequence_number;
 } sender_header;
 
 struct window
 {
-    int begin_num = -WINDOW_SIZE;
-    bool is_ack[WINDOW_SIZE];
+    // pkt ID
+    int pkt_ID = 0;
+    // pkt need to be sended future
+    int pkt_num = 0;
+    // pkt need to be sended now
+    int pkt_send_ID = 0;
+    // pkt that has been ACKed
+    int ack_pkt_num = 0;
+    // pkts
     packet *pkts[WINDOW_SIZE];
 };
 
@@ -80,7 +84,15 @@ decltype(sender_header.checksum) Sender_Make_Checksum(packet *pkt)
 
     // add all the characters in payload, but jump the checksum bits
     for (int i = sizeof(sender_header.checksum); i < RDT_PKTSIZE; i++)
-        checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
+    {
+        checksum += i*pkt->data[i];
+        // checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
+        // printf("send: %d %d %d\n",i,checksum,pkt->data[i]);
+
+    }
+    
+    // checksum += i*pkt->data[i];
+        // checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return checksum;
 }
@@ -91,8 +103,9 @@ bool Sender_Check_Checksum(packet *pkt)
     decltype(sender_header.checksum) checksum = 0x0;
 
     // add all the characters in payload, but jump the checksum bits
-    for (int i = sizeof(sender_header.checksum); i < RDT_PKTSIZE; i++)
-        checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
+    for (int i = sizeof(sender_header.checksum); i < sizeof(sender_header.checksum)+sizeof(int); i++)
+    checksum += i*pkt->data[i];
+        // checksum = (checksum >> 8) ^ sender_CrcTable[(checksum & 0xFF) ^ pkt->data[i]];
 
     return (decltype(sender_header.checksum))checksum == *(decltype(sender_header.checksum) *)pkt->data;
 }
@@ -109,8 +122,7 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[sizeof(sender_header.checksum)] = maxpayload_size;
-        pkt->data[sizeof(sender_header.checksum) + 1] = index;
+        pkt->data[sizeof(sender_header.checksum) + sizeof(sender_header.pkt_ID)] = maxpayload_size;
         memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, maxpayload_size);
 
         // add it to the list
@@ -125,76 +137,45 @@ void Add_Message(message *msg)
     {
         // fill in the packet
         packet *pkt = new packet();
-        pkt->data[sizeof(sender_header.checksum)] = msg->size - index * maxpayload_size;
-        pkt->data[sizeof(sender_header.checksum) + 1] = index;
-        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[sizeof(sender_header.checksum)]);
+        pkt->data[sizeof(sender_header.checksum) + sizeof(sender_header.pkt_ID)] = msg->size - index * maxpayload_size;
+        memcpy(pkt->data + HEADER_SIZE, msg->data + index * maxpayload_size, pkt->data[sizeof(sender_header.checksum) + sizeof(sender_header.pkt_ID)]);
 
         // add it to the list
         sender_pkt_list->emplace_back(pkt);
     }
 }
 
-void Resend()
+void Send()
 {
     // send packets
-    for (int i = 0; i < WINDOW_SIZE; i++)
+    packet *pkt;
+    while (sender_pkt_window->pkt_send_ID < sender_pkt_window->pkt_ID)
     {
-        if (sender_pkt_window->pkts[i] == NULL || sender_pkt_window->is_ack[i] == true)
-            continue;
-        Sender_ToLowerLayer(sender_pkt_window->pkts[i]);
+        // pkt = new packet();
+        pkt = sender_pkt_window->pkts[sender_pkt_window->pkt_send_ID % WINDOW_SIZE];
+        // memcpy(&pkt, sender_pkt_window->pkts[sender_pkt_window->pkt_send_ID % WINDOW_SIZE], sizeof(packet));
+        Sender_ToLowerLayer(pkt);
+        // printf("%d %d\n",*(decltype(sender_header.pkt_ID) *)(pkt->data),Sender_Make_Checksum(pkt));
+        sender_pkt_window->pkt_send_ID++;
     }
-
-    // set timer
-    Sender_StartTimer(TIME_OUT);
 }
 
 void Update_Window()
 {
-    // check if all pkts are acked
-    bool is_all_ack = true;
-    for (int i = 0; i < WINDOW_SIZE; i++)
-        is_all_ack = is_all_ack && sender_pkt_window->is_ack[i];
-
-    if (!is_all_ack)
-        return;
-
-    // stop timer
-    if (Sender_isTimerSet())
-        Sender_StopTimer();
-
-    for (int i = 0; i < WINDOW_SIZE; i++)
+    while (sender_pkt_window->pkt_num < WINDOW_SIZE && sender_pkt_list->size() > 0)
     {
-        if (sender_pkt_window->pkts[i] == NULL)
-            continue;
-        delete sender_pkt_window->pkts[i];
-        sender_pkt_window->pkts[i] = NULL;
-        sender_pkt_window->is_ack[i] = true;
-    }
-
-    // init the window, use local var to avoid list's size is 0 but make window num add
-    int next_begin_num = (unsigned)(char)((sender_pkt_window->begin_num + WINDOW_SIZE) % MAX_WINDOW_NUM);
-
-    // move pkts to window
-    int i;
-    for (i = 0; i < WINDOW_SIZE; i++)
-    {
-        packet *top_pkt = sender_pkt_list->front();
-        if (top_pkt == NULL)
-            break;
-        sender_pkt_window->pkts[i] = top_pkt;
-        sender_pkt_window->pkts[i]->data[sizeof(sender_header.checksum) + 2] = next_begin_num + i;
-        *(decltype(sender_header.checksum) *)sender_pkt_window->pkts[i]->data = Sender_Make_Checksum(sender_pkt_window->pkts[i]);
-        sender_pkt_window->is_ack[i] = false;
+        packet *pkt = sender_pkt_list->front();
         sender_pkt_list->pop_front();
+
+        *(decltype(sender_header.pkt_ID) *)(pkt->data + sizeof(sender_header.checksum)) = sender_pkt_window->pkt_ID;
+        // printf("%d\n",*(decltype(sender_header.pkt_ID) *)(pkt->data + sizeof(sender_header.checksum)));
+        *(decltype(sender_header.checksum) *)pkt->data = Sender_Make_Checksum(pkt);
+        // fill window with packet
+        sender_pkt_window->pkts[sender_pkt_window->pkt_ID % WINDOW_SIZE] = pkt;
+        sender_pkt_window->pkt_ID++;
+        sender_pkt_window->pkt_num++;
     }
-
-    // no other packets
-    if (i == 0)
-        return;
-
-    // add it now!
-    sender_pkt_window->begin_num = next_begin_num;
-    Resend();
+    Send();
 }
 
 /* sender initialization, called once at the very beginning */
@@ -208,13 +189,16 @@ void Sender_Init()
     // init pkt window
     sender_pkt_window = std::make_unique<window>();
     for (int i = 0; i < WINDOW_SIZE; i++)
-    {
-        sender_pkt_window->is_ack[i] = true;
         sender_pkt_window->pkts[i] = NULL;
-    }
 
     // make checksum table
     Sender_Make_Checksum_Table();
+
+        printf("sed:");
+    for (int i=0;i<10;i++)
+    {
+        printf("%d ",sender_CrcTable[i]);
+    }
 }
 
 /* sender finalization, called once at the very end.
@@ -231,7 +215,11 @@ void Sender_Final()
 void Sender_FromUpperLayer(struct message *msg)
 {
     Add_Message(msg);
+
+    if (Sender_isTimerSet())
+        return;
     // it is only called the first time
+    Sender_StartTimer(TIME_OUT);
     Update_Window();
 }
 
@@ -239,17 +227,39 @@ void Sender_FromUpperLayer(struct message *msg)
    sender */
 void Sender_FromLowerLayer(struct packet *pkt)
 {
-    // check it's checksum and if it has passed
-    if (!Sender_Check_Checksum(pkt) || (pkt->data[sizeof(sender_header.checksum) + 3] < (char)sender_pkt_window->begin_num) || (pkt->data[sizeof(sender_header.checksum) + 3] - (char)sender_pkt_window->begin_num > OVER_CIRCLE))
+    // // check it's checksum
+    if (!Sender_Check_Checksum(pkt))
         return;
 
-    // update window
-    sender_pkt_window->is_ack[pkt->data[sizeof(sender_header.checksum) + 3] % WINDOW_SIZE] = true;
-    Update_Window();
+    int ack;
+    memcpy(&ack, pkt->data + sizeof(decltype(sender_header.checksum)), sizeof(int));
+
+    if (sender_pkt_window->ack_pkt_num <= ack && ack < sender_pkt_window->pkt_ID)
+    {
+        Sender_StartTimer(TIME_OUT);
+        // update pkt num
+        sender_pkt_window->pkt_num -= (ack - sender_pkt_window->ack_pkt_num + 1);
+        // update up bound
+        sender_pkt_window->ack_pkt_num = ack + 1;
+        Update_Window();
+    }
+    // no packet now
+    if (ack == sender_pkt_window->pkt_ID - 1)
+        Sender_StopTimer();
+
+    // // check it's checksum and if it has passed
+    // if (!Sender_Check_Checksum(pkt) || (pkt->data[sizeof(sender_header.checksum) + 3] < (char)sender_pkt_window->begin_num) || (pkt->data[sizeof(sender_header.checksum) + 3] - (char)sender_pkt_window->begin_num > OVER_CIRCLE))
+    //     return;
+
+    // // update window
+    // sender_pkt_window->is_ack[pkt->data[sizeof(sender_header.checksum) + 3] % WINDOW_SIZE] = true;
+    // Update_Window();
 }
 
 /* event handler, called when the timer expires */
 void Sender_Timeout()
 {
-    Resend();
+    Sender_StartTimer(TIME_OUT);
+    sender_pkt_window->pkt_send_ID = sender_pkt_window->ack_pkt_num;
+    Update_Window();
 }
