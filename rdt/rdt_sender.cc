@@ -6,8 +6,8 @@
  *       situations.  In this implementation, the packet format is laid out as
  *       the following:
  *
- *       |<-  1 byte  ->|<-             the rest            ->|
- *       | payload size |<-             payload             ->|
+ *       |<-  4 bytes ->|<-  4 byte  ->|<-  1 byte  ->|<-  1 byte  ->|<-             the rest            ->|
+ *       |   checksum   |    pkt_ID    |    has_more  | payload_size |<-             payload             ->|
  *
  *       The first byte of each packet indicates the size of the payload
  *       (excluding this single-byte header)
@@ -40,14 +40,14 @@ struct header
 
 struct window
 {
-    // pkt ID
+    // max pkt ID in window
     int pkt_ID = 0;
-    // pkt need to be sended future
+    // pkt num not be sended in window 
     int pkt_num = 0;
-    // pkt need to be sended now
+    // pkt ID need to be sended now
     int pkt_send_ID = 0;
-    // pkt that has been ACKed
-    int ack_pkt_num = 0;
+    // min pkt ID acked 
+    int ack_pkt_ID = 0;
     // pkts
     packet *pkts[WINDOW_SIZE];
 };
@@ -201,15 +201,15 @@ void Sender_FromLowerLayer(struct packet *pkt)
         return;
 
     int ack = *(int *)(pkt->data + sizeof(sender_header.checksum));
-    if (sender_pkt_window->ack_pkt_num <= ack && ack < sender_pkt_window->pkt_ID)
+    if (sender_pkt_window->ack_pkt_ID <= ack && ack < sender_pkt_window->pkt_ID)
     {
         Sender_StartTimer(TIME_OUT);
 
         // update pkt num
-        sender_pkt_window->pkt_num -= (ack - sender_pkt_window->ack_pkt_num + 1);
+        sender_pkt_window->pkt_num -= (ack - sender_pkt_window->ack_pkt_ID + 1);
 
         // update up bound
-        sender_pkt_window->ack_pkt_num = ack + 1;
+        sender_pkt_window->ack_pkt_ID = ack + 1;
         Update_Window();
     }
 
@@ -222,6 +222,6 @@ void Sender_FromLowerLayer(struct packet *pkt)
 void Sender_Timeout()
 {
     Sender_StartTimer(TIME_OUT);
-    sender_pkt_window->pkt_send_ID = sender_pkt_window->ack_pkt_num;
+    sender_pkt_window->pkt_send_ID = sender_pkt_window->ack_pkt_ID;
     Update_Window();
 }

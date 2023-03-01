@@ -5,8 +5,8 @@
  *       In this implementation, the packet format is laid out as
  *       the following:
  *
- *       |<-  4 bytes ->|<-  1 byte  ->|<-  1 byte  ->|<-  1 byte  ->|<-  1 byte  ->|<-             the rest            ->|
- *       |   checksum   | payload_size |     index    |    seq_num   |  ack_seq_num |<-             payload             ->|
+ *       |<-  4 bytes ->|<-  4 byte  ->|<-             the rest            ->|
+ *       |   checksum   |    pkt_ID    |<-             payload             ->|
  *
  */
 
@@ -76,6 +76,25 @@ void Reply(int ack)
     Receiver_ToLowerLayer(pkt);
 }
 
+void Wrapper_Receiver_ToUpperLayer(packet *pkt)
+{
+    struct message *msg = (struct message *)malloc(sizeof(struct message));
+    ASSERT(msg != NULL);
+
+    msg->size = pkt->data[sizeof(receiver_header.checksum) + sizeof(receiver_header.pkt_ID) + sizeof(receiver_header.has_more)];
+
+    // sanity check in case the packet is corrupted
+    if (msg->size < 0)
+        msg->size = 0;
+    if (msg->size > RDT_PKTSIZE - HEADER_SIZE)
+        msg->size = RDT_PKTSIZE - HEADER_SIZE;
+
+    msg->data = (char *)malloc(msg->size);
+    ASSERT(msg->data != NULL);
+    memcpy(msg->data, pkt->data + HEADER_SIZE, msg->size);
+    Receiver_ToUpperLayer(msg);
+}
+
 void Slide_Window(packet *pkt)
 {
     int pktID = *(decltype(receiver_header.pkt_ID) *)(pkt->data + sizeof(receiver_header.checksum));
@@ -105,27 +124,13 @@ void Slide_Window(packet *pkt)
     {
         receiver_pkt_window->ack_num++;
 
-        struct message *msg = (struct message *)malloc(sizeof(struct message));
-        ASSERT(msg != NULL);
-
-        msg->size = pkt->data[sizeof(receiver_header.checksum) + sizeof(receiver_header.pkt_ID) + sizeof(receiver_header.has_more)];
-
-        // sanity check in case the packet is corrupted
-        if (msg->size < 0)
-            msg->size = 0;
-        if (msg->size > RDT_PKTSIZE - HEADER_SIZE)
-            msg->size = RDT_PKTSIZE - HEADER_SIZE;
-
-        msg->data = (char *)malloc(msg->size);
-        ASSERT(msg->data != NULL);
-        memcpy(msg->data, pkt->data + HEADER_SIZE, msg->size);
-        Receiver_ToUpperLayer(msg);
+        Wrapper_Receiver_ToUpperLayer(pkt);
 
         // check duplicate
         if (receiver_pkt_window->valid[receiver_pkt_window->ack_num % WINDOW_SIZE])
         {
             pkt = receiver_pkt_window->pkts[receiver_pkt_window->ack_num % WINDOW_SIZE];
-            memcpy(&pktID, pkt->data + sizeof(receiver_header.checksum), sizeof(int));
+            pktID = *(int *)(pkt->data + sizeof(receiver_header.checksum));
             receiver_pkt_window->valid[receiver_pkt_window->ack_num % WINDOW_SIZE] = false;
         }
         else
