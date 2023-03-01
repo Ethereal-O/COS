@@ -10,22 +10,23 @@
 
 ### 包头设计
 
-使用8字节包头，包含4字节的checksum，1字节的payload_size，1字节的index，1字节的sequence_number，1字节的acknowledgment_sequence_number。
+1. 数据包
+使用10字节包头，包含4字节的checksum，4字节的pkt_ID，1字节的has_more，1字节的payload_size。
 - checksum：
-  - 我使用了CRC去实现checksum。这是因为CRC具有更好的识别错误能力。而由于普通的checksum求和的期望与原值相等，故错误可能被更大概率遗漏。
+  - 我使用了i*data[i]去实现checksum。这是因为这样使得checksum期望不是0，具有更好的识别错误能力。而由于普通的checksum求和的期望与原值相等，故错误可能被更大概率遗漏。
   - 我使用32位checksum，经过测试，在1000次测试，每次模拟时间1000s，传输耗时0.1s，平均大小100bytes，乱序概率0.3，丢失概率0.3，错误概率0.3，最终错误次数为0次。
-- payload_size：即存在的data大小。
-- index：指在当前message中的位置。
-- sequence_number：指传输序号。
-  - 传输序号是一个小于10\*WINDOW_SIZE的数值，使得其可以在1个字节内不溢出。当序号增长到大于10\*WINDOW_SIZE时，即变为0。这样设计是为了receiver能够知道当前的序号，将过时的包进行丢弃，同时根据此值更新window。
-- acknowledgment_sequence_number：确认号。简单地将传输序号复制到此位置，表示当前序号已经被receiver确认。
+- pkt_ID：指传输序号。
+- has_more：当前message是否有更多包。
+- payload_size：指包大小。
+
+2. ack
+使用8字节包头，包含4字节的checksum，4字节的pkt_ID。
 
 ## 发送设计
 
 - 维护一个链表，存储所有未发送的包，这样使得上层的消息不会被阻断。当消息到来时，将其转换为包，并加入链表的尾部。
-- 当收到包时，更新window中当前位置包的接收状态，并检查是否能够更新整个window。
-- 当当前window中所有包已经被确认收到，即更新window，将当前window中包delete（防止内存泄漏）,从链表中取出包，放入window。由于只有一个全局的timer，因此我们不能针对每个包设置timer，只能对整个窗口设置。
-- 当超时时，检查window中未被确认收到的包，重新发送。
+- 当收到包时，更新window中当前位置包的接收状态，并更新是否能够window，从链表中取出包，放入window。
+- 当超时时，从最低未被确认收到的包开始全部发送。
 
 ## 接收设计
 
